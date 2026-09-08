@@ -1,0 +1,116 @@
+/* psswrd — btop theme: near-black opaque panels, orange accents.
+   NOTE: true terminal transparency is not possible with Textual
+   (it resolves transparent/ansi-default backgrounds to opaque
+   colors; see Textual FAQ "translucent app background"). So this
+   theme is deliberately opaque like btop itself. */
+
+App {
+    background: #0a0c10;
+    color: #c9d1d9;
+}
+
+.dim { color: #5b626e; }
+
+/* — top status bar — */
+#topbar {
+    height: 3;
+    border: round #2a2f38;
+    background: #0a0c10;
+    color: #c9d1d9;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+/* — main panels — */
+#main { height: 1fr; }
+
+#sidebar {
+    width: 38%;
+    height: 1fr;
+    border: round #2a2f38;
+    border-title-color: #ee7600;
+    border-title-style: bold;
+    background: #0a0c10;
+    padding: 0 1;
+    margin-right: 1;
+}
+
+#detail {
+    width: 62%;
+    height: 1fr;
+    border: round #2a2f38;
+    background: #0a0c10;
+    padding: 0 1;
+}
+
+#search {
+    margin: 0 0 1 0;
+    background: #11141a;
+    border: tall #2a2f38;
+    color: #e6edf3;
+}
+#search:focus { border: tall #ee7600; }
+
+#entries { height: 1fr; background: #0a0c10; }
+#entries ListItem { padding: 0 1; color: #c9d1d9; }
+#entries ListItem.-highlight { background: #ee7600; color: #0a0c10; }
+#entries ListItem.-highlight Label { color: #0a0c10; }
+#entries:focus ListItem.-highlight { background: #ee7600; color: #0a0c10; }
+
+#detail-body { height: 1fr; padding: 1 0 0 0; }
+#meter { height: 1; margin: 1 0; }
+
+/* btop-menu style buttons: flat, bracket keys */
+#detail-actions { height: auto; margin-top: 1; }
+#detail-actions Button { min-width: 0; }
+Button {
+    background: #11141a;
+    color: #e6edf3;
+    border: none;
+    padding: 0 1;
+    margin-right: 1;
+    text-style: bold;
+}
+Button:hover, Button:focus {
+    background: #ee7600;
+    color: #0a0c10;
+}
+#btn-delete:hover, #btn-delete:focus { background: #f85149; color: #0a0c10; }
+#c-yes:hover, #c-yes:focus { background: #f85149; color: #0a0c10; }
+
+/* — bottom bars — */
+#status {
+    height: 1;
+    margin-top: 1;
+    color: #8b949e;
+    padding: 0 1;
+}
+#menubar {
+    height: 1;
+    color: #5b626e;
+    padding: 0 1;
+}
+
+/* modal rows */
+.btnrow { height: auto; margin-top: 1; }
+.btnrow Button { margin-right: 1; min-width: 0; }
+
+Input {
+    background: #11141a;
+    border: tall #2a2f38;
+    color: #e6edf3;
+}
+Input:focus { border: tall #ee7600; }
+TextArea {
+    background: #11141a;
+    border: tall #2a2f38;
+    color: #e6edf3;
+    height: 5;
+}
+TextArea:focus { border: tall #ee7600; }
+Switch { margin: 0 0 1 0; }
+
+/* scrollbars like thin btop rails */
+Scrollbar { background: #0a0c10; }
+ScrollbarThumb { background: #2a2f38; }
+ScrollbarThumb:hover { background: #ee7600; }

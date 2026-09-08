@@ -1,0 +1,9 @@
+*.enc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+AGENTS.md
+.idea
