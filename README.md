@@ -1,3 +1,5 @@
+#WIP absolutely not finished
+
 # psswrd — local-first TUI password manager
 
 Type `psswrd`, enter your master password, manage passwords in a btop-style TUI.
