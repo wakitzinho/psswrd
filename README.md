@@ -1,4 +1,4 @@
-#WIP absolutely not finished
+# WIP absolutely not finished
 
 # psswrd — local-first TUI password manager
 
