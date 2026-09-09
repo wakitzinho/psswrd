@@ -1,4 +1,4 @@
-"""Import from Bitwarden JSON exports (unencrypted)."""
+"""Import from and export to Bitwarden JSON (unencrypted)."""
 
 from __future__ import annotations
 
@@ -33,3 +33,22 @@ def parse_bitwarden_file(path: str | Path) -> list[dict]:
             notes=it.get("notes", "") or "",
         ))
     return out
+
+
+def export_bitwarden(entries: list[dict], path: str | Path) -> None:
+    """Export vault entries as an unencrypted Bitwarden JSON file."""
+    items = []
+    for e in entries:
+        item = {
+            "name": e.get("name", ""),
+            "login": {
+                "username": e.get("email", ""),
+                "password": e.get("password", ""),
+                "uris": [{"uri": e.get("url", "")}] if e.get("url") else [],
+            },
+            "notes": e.get("notes", ""),
+        }
+        items.append(item)
+    blob = {"encrypted": False, "items": items}
+    p = Path(path).expanduser()
+    p.write_text(json.dumps(blob, indent=2))

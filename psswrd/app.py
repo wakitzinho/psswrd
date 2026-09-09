@@ -31,7 +31,7 @@ from prompt_toolkit.widgets import Button, Frame, Label, TextArea
 
 from .clipboard import copy_text
 from .generator import generate_password
-from .importer import parse_bitwarden_file
+from .importer import parse_bitwarden_file, export_bitwarden
 from .vault import Vault, new_entry
 
 ACCENT = "#ee7600"
@@ -104,12 +104,14 @@ class PsswrdApp:
         self.vault = vault
         self._selected_id: str | None = None
         self._revealed = False
-        self._status = "ready — / to filter, n for new"
+        self._status = "ready — / to filter, n for new, x to export"
         self._in_filter = False
         self._closers: list = []          # cancel-callbacks for open dialogs
         self._floats: list[Float] = []    # live floats (same order)
         self._focus_elems: list = []      # focus target per open dialog
         self._entry_fields: dict = {}     # current entry-dialog fields
+        self._entry_field_order: list = [] # ordered list of entry fields
+        self._entry_save = None            # current entry save callback
         self._gen_len = None              # current generator length field
         self._hide_task: asyncio.Task | None = None
         self.app: Application | None = None
@@ -245,10 +247,10 @@ class PsswrdApp:
             return [("class:dim", "no entries — [n]ew / [i]mport")]
         toks: list = [
             ("class:accent", f"┤ {e.get('name','(no name)')} ├\n"),
-            ("class:dim", "mail │ "),
+            ("class:dim", "mail  "),
             ("", f"{e.get('email','—') or '—'}", self._click_copy_mail),
             ("", "\n"),
-            ("class:dim", "pass │ "),
+            ("class:dim", "pass  "),
         ]
         pw = e.get("password", "")
         if self._revealed and pw:
@@ -258,17 +260,17 @@ class PsswrdApp:
         else:
             toks += [("class:dim", "(empty)\n")]
         toks += [
-            ("class:dim", "url  │ "),
+            ("class:dim", "url   "),
             ("", f"{e.get('url','—') or '—'}\n"),
-            ("class:dim", "note │\n"),
+            ("class:dim", "note  \n"),
             ("", f"{e.get('notes','') or '—'}\n"),
             ("class:dim", f"upd {_fmt_ts(e.get('modified',0))} · new {_fmt_ts(e.get('created',0))}\n"),
         ]
         label, pct, color = _strength(pw)
         toks += [
-            ("class:dim", "strength │ "),
+            ("class:dim", "strength "),
             (f"{color}", _meter_bar(pct)),
-            ("", f"  {pct:>3}% {label}  │ len {len(pw)}"),
+            ("", f"  {pct:>3}% {label}  len {len(pw)}"),
         ]
         return toks
 
@@ -286,7 +288,7 @@ class PsswrdApp:
     def _menubar_tokens(self):
         items = [("n", "new"), ("e", "edit"), ("r", "reveal"), ("y", "copy"),
                  ("d", "del"), ("j/k", "move"), ("/", "filter"),
-                 ("i", "import"), ("l", "lock"), ("q", "quit")]
+                 ("i", "import"), ("x", "export"), ("q", "quit")]
         toks: list = []
         for key, label in items:
             toks += [("class:menukey", f"[{key}]"), ("class:menudim", f"{label}  ")]
@@ -435,9 +437,9 @@ class PsswrdApp:
         def _(event):
             self._open_import()
 
-        @kb.add("l", filter=active)
+        @kb.add("x", filter=active)
         def _(event):
-            self._open_lock()
+            self._open_export()
 
         @kb.add("/", filter=active)
         def _(event):
@@ -474,6 +476,30 @@ class PsswrdApp:
         @kb.add("enter", filter=Condition(lambda: self._in_filter and not self._closers))
         def _(event):
             self._leave_filter()
+
+        def _in_entry_fields():
+            if not self._entry_field_order or not self._closers:
+                return False
+            try:
+                focused = self.app.layout.current
+                return focused in self._entry_field_order
+            except Exception:
+                return False
+
+        @kb.add("enter", filter=Condition(_in_entry_fields))
+        def _(event):
+            pass
+
+        def _entry_open():
+            return bool(self._entry_field_order and self._closers)
+
+        @kb.add("c-g", filter=Condition(_entry_open))
+        def _(event):
+            pw_field = self._entry_fields.get("password")
+            if pw_field:
+                self._open_generator(
+                    password=pw_field.text,
+                    on_use=lambda p: self._gen_used(pw_field, p))
 
     def _leave_filter(self) -> None:
         self._in_filter = False
@@ -531,6 +557,9 @@ class PsswrdApp:
             self._closers.pop()
         if self._focus_elems:
             self._focus_elems.pop()
+        if not self._floats:
+            self._entry_field_order = []
+            self._entry_save = None
         if self.app is not None:
             # return focus to the dialog underneath (if any), else main actions
             target = self._focus_elems[-1] if self._focus_elems else None
@@ -591,8 +620,25 @@ class PsswrdApp:
             self._open_generator(password=f_pass.text,
                                  on_use=lambda pw: self._gen_used(f_pass, pw))
 
-        for _f in (f_name, f_email, f_pass, f_url):
-            _f.accept_handler = do_save
+        _fields = [f_name, f_email, f_pass, f_url, f_notes]
+        self._entry_fields = {
+            "name": f_name, "email": f_email, "password": f_pass,
+            "url": f_url, "notes": f_notes,
+        }
+        self._entry_field_order = _fields
+        self._entry_save = do_save
+
+        def _make_next_handler(fields, idx):
+            def handler(_buffer=None):
+                if idx < len(fields) - 1:
+                    self.app.layout.focus(fields[idx + 1])
+                else:
+                    do_save()
+                return True
+            return handler
+
+        for i, f in enumerate(_fields):
+            f.accept_handler = _make_next_handler(_fields, i)
 
         body = HSplit([
             Label("name:", style="class:dim"),
@@ -601,7 +647,7 @@ class PsswrdApp:
             f_email,
             Label("password:", style="class:dim"),
             f_pass,
-            VSplit([Button("[g]enerate…", handler=do_generate)], padding=0),
+            VSplit([Button("[ctrl+g]enerate…", handler=do_generate, width=18)], padding=0),
             Label("url:", style="class:dim"),
             f_url,
             Label("notes:", style="class:dim"),
@@ -614,10 +660,6 @@ class PsswrdApp:
              Button("[esc]", handler=self._pop_float)],
             border="class:dlg.border",
         )
-        self._entry_fields = {
-            "name": f_name, "email": f_email, "password": f_pass,
-            "url": f_url, "notes": f_notes,
-        }
         self._push_float(dlg, focus_elem=f_name, on_esc=self._pop_float)
 
     def _gen_used(self, field: TextArea, password: str | None) -> None:
@@ -754,42 +796,38 @@ class PsswrdApp:
         )
         self._push_float(dlg, focus_elem=f_path, on_esc=self._pop_float)
 
-    def _open_lock(self) -> None:
-        f_pw = self._field("", password=True)
-        err = Label("", style="class:dim")
-        err.text = "enter master password to unlock"
+    def _open_export(self) -> None:
+        f_path = self._field("")
+        err = Label("", style="class:err")
 
-        def unlock(_buffer=None) -> None:
-            if self.vault.verify_password(f_pw.text):
-                self._revealed = False
-                self._sync_pass_label()
-                self._log("unlocked")
-                self._pop_float()
-            else:
-                err.text = "wrong password"
-                f_pw.text = ""
+        def go(_buffer=None) -> None:
+            path = f_path.text.strip()
+            if not path:
+                err.text = "enter a file path"
                 self._invalidate()
+                return
+            try:
+                export_bitwarden(self.vault.entries, path)
+            except Exception as ex:
+                err.text = f"export failed: {ex}"
+                self._invalidate()
+                return
+            self._log(f"exported {len(self.vault.entries)} entries")
+            self._pop_float()
 
-        def quit_app() -> None:
-            if self.app is not None:
-                self.app.exit()
-
-        f_pw.accept_handler = unlock
+        f_path.accept_handler = go
 
         body = HSplit([
-            Label("master password:", style="class:dim"),
-            f_pw,
+            Label("save path for unencrypted bitwarden json:", style="class:dim"),
+            f_path,
             err,
         ])
         dlg = self._dialog(
-            "┤ LOCKED ├", body,
-            [Button("[⏎]unlock", handler=unlock),
-             Button("[q]uit", handler=quit_app)],
+            "┤ EXPORT ├  bitwarden json", body,
+            [Button("[⏎]export", handler=go),
+             Button("[esc]", handler=self._pop_float)],
         )
-        # Esc must NOT bypass the lock: closer is None
-        self._push_float(dlg, focus_elem=f_pw, on_esc=None)
-        self._revealed = False
-        self._sync_pass_label()
+        self._push_float(dlg, focus_elem=f_path, on_esc=self._pop_float)
 
     # ---------- run ----------
 
