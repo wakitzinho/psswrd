@@ -44,5 +44,6 @@ Needs Python ≥ 3.10. Deps: `prompt-toolkit`, `cryptography`, `argon2-cffi`, `p
 | `c` | copy email |
 | `d` | delete selected |
 | `i` | import Bitwarden JSON |
+| `x` | export passwords as JSON |
 | `l` | lock |
-| `q` | quit |
+
