@@ -103,7 +103,6 @@ class PsswrdApp:
     def __init__(self, vault: Vault) -> None:
         self.vault = vault
         self._selected_id: str | None = None
-        self._revealed = False
         self._status = "ready — / to filter, n for new, x to export"
         self._in_filter = False
         self._closers: list = []          # cancel-callbacks for open dialogs
@@ -113,7 +112,6 @@ class PsswrdApp:
         self._entry_field_order: list = [] # ordered list of entry fields
         self._entry_save = None            # current entry save callback
         self._gen_len = None              # current generator length field
-        self._hide_task: asyncio.Task | None = None
         self.app: Application | None = None
         self._build_widgets()
         self._refresh_selection(keep=False)
@@ -136,7 +134,6 @@ class PsswrdApp:
         self.search_field.buffer.on_text_changed += self._on_filter_changed
         self.search_field.accept_handler = lambda _b: self._leave_filter()
 
-        self.btn_pass = Button("[r]eveal", handler=self._toggle_reveal)
         self.btn_mail = Button("[c]mail", handler=self._copy_mail)
         self.btn_edit = Button("[e]dit", handler=self._open_edit)
         self.btn_del = Button("[d]el", handler=self._open_delete)
@@ -150,7 +147,7 @@ class PsswrdApp:
             HSplit([
                 Window(content=self.detail_control),
                 VSplit(
-                    [self.btn_pass, self.btn_mail, self.btn_edit, self.btn_del],
+                    [self.btn_mail, self.btn_edit, self.btn_del],
                     padding=3, height=1,
                 ),
             ]),
@@ -173,14 +170,12 @@ class PsswrdApp:
     def _topbar_tokens(self):
         total = len(self.vault.entries)
         shown = len(self.filtered_entries())
-        lock = "◉ REVEALED" if self._revealed else "● UNLOCKED"
         clock = datetime.now().strftime("%H:%M:%S")
         return [
             ("", "▚"),
             ("class:accent", "psswrd"),
             ("", f"▞  entries: {shown}/{total}  vault: {self.vault.path.name}  │  "),
-            ("", lock),
-            ("class:dim", f"  │  {clock}"),
+            ("class:dim", f"  {clock}"),
         ]
 
     def _visible_entries(self) -> list[dict]:
@@ -231,7 +226,6 @@ class PsswrdApp:
         def handler(mouse_event) -> None:
             if mouse_event.event_type == MouseEventType.MOUSE_UP:
                 self._selected_id = entry_id
-                self._revealed = False
                 self._invalidate()
         return handler
 
@@ -253,10 +247,8 @@ class PsswrdApp:
             ("class:dim", "pass  "),
         ]
         pw = e.get("password", "")
-        if self._revealed and pw:
-            toks += [("class:good", pw, self._click_reveal), ("", "\n")]
-        elif pw:
-            toks += [("class:dim", "••••••••  (r to reveal+copy)", self._click_reveal), ("", "\n")]
+        if pw:
+            toks += [("class:good", pw, self._click_copy_pass), ("", "\n")]
         else:
             toks += [("class:dim", "(empty)\n")]
         toks += [
@@ -274,9 +266,9 @@ class PsswrdApp:
         ]
         return toks
 
-    def _click_reveal(self, mouse_event) -> None:
+    def _click_copy_pass(self, mouse_event) -> None:
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
-            self._toggle_reveal()
+            self._copy_pass_only()
 
     def _click_copy_mail(self, mouse_event) -> None:
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
@@ -286,7 +278,7 @@ class PsswrdApp:
         return [("class:good", "▸ "), ("class:status", self._status)]
 
     def _menubar_tokens(self):
-        items = [("n", "new"), ("e", "edit"), ("r", "reveal"), ("y", "copy"),
+        items = [("n", "new"), ("e", "edit"), ("y", "copy"),
                  ("d", "del"), ("j/k", "move"), ("/", "filter"),
                  ("i", "import"), ("x", "export"), ("q", "quit")]
         toks: list = []
@@ -309,7 +301,6 @@ class PsswrdApp:
         ids = {e["id"] for e in entries}
         if not keep or self._selected_id not in ids:
             self._selected_id = entries[0]["id"] if entries else None
-        self._revealed = False
 
     def _move(self, delta: int) -> None:
         entries = self._visible_entries()
@@ -321,59 +312,17 @@ class PsswrdApp:
         except ValueError:
             i = 0 if delta > 0 else len(ids) - 1
             self._selected_id = ids[i]
-            self._revealed = False
             self._invalidate()
             return
         i = max(0, min(len(ids) - 1, i + delta))
         self._selected_id = ids[i]
-        self._revealed = False
         self._invalidate()
 
     def _on_filter_changed(self, _buffer) -> None:
         self._refresh_selection(keep=True)
         self._invalidate()
 
-    # ---------- reveal / copy ----------
-
-    def _toggle_reveal(self) -> None:
-        if self._revealed:
-            self._revealed = False
-            self._sync_pass_label()
-            self._invalidate()
-        else:
-            self._reveal_and_copy()
-
-    def _sync_pass_label(self) -> None:
-        try:
-            self.btn_pass.text = "[h]ide" if self._revealed else "[r]eveal"
-        except Exception:
-            pass
-
-    def _reveal_and_copy(self) -> None:
-        e = self._current()
-        if not e or not e.get("password"):
-            self._log("nothing to copy")
-            return
-        self._revealed = True
-        ok = copy_text(e["password"])
-        self._sync_pass_label()
-        self._log("pass copied to clipboard" if ok else "revealed (no clipboard)")
-        self._invalidate()
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        if self._hide_task and not self._hide_task.done():
-            self._hide_task.cancel()
-        async def _hide():
-            try:
-                await asyncio.sleep(20)
-            except asyncio.CancelledError:
-                return
-            self._revealed = False
-            self._sync_pass_label()
-            self._invalidate()
-        self._hide_task = loop.create_task(_hide())
+    # ---------- copy ----------
 
     def _copy_mail(self) -> None:
         e = self._current()
@@ -420,10 +369,6 @@ class PsswrdApp:
         @kb.add("d", filter=active)
         def _(event):
             self._open_delete()
-
-        @kb.add("r", filter=active)
-        def _(event):
-            self._toggle_reveal()
 
         @kb.add("y", filter=active)
         def _(event):
@@ -504,7 +449,7 @@ class PsswrdApp:
     def _leave_filter(self) -> None:
         self._in_filter = False
         if self.app is not None:
-            self.app.layout.focus(self.btn_pass)
+            self.app.layout.focus(self.btn_mail)
         self._invalidate()
 
     # ---------- floats / dialogs ----------
@@ -563,7 +508,7 @@ class PsswrdApp:
         if self.app is not None:
             # return focus to the dialog underneath (if any), else main actions
             target = self._focus_elems[-1] if self._focus_elems else None
-            self.app.layout.focus(target or self.btn_pass)
+            self.app.layout.focus(target or self.btn_mail)
             self._invalidate()
 
     def _field(self, text: str = "", password: bool = False, height: int = 1,
@@ -612,8 +557,6 @@ class PsswrdApp:
                 self.search_field.text = ""
             except Exception:
                 pass
-            self._revealed = False
-            self._sync_pass_label()
             self._pop_float()
 
         def do_generate() -> None:
@@ -734,7 +677,7 @@ class PsswrdApp:
         )
         self._push_float(dlg, focus_elem=f_len, on_esc=self._pop_float)
 
-    # ----- confirm / import / lock -----
+    # ----- confirm / import -----
 
     def _open_delete(self) -> None:
         e = self._current()
@@ -744,7 +687,6 @@ class PsswrdApp:
         def yes() -> None:
             self.vault.delete(e["id"])
             self._selected_id = None
-            self._revealed = False
             self._refresh_selection(keep=False)
             self._log("entry deleted")
             self._pop_float()
@@ -852,7 +794,7 @@ class PsswrdApp:
 
     def run(self) -> None:
         self.app = self._build_app()
-        self.app.layout.focus(self.btn_pass)
+        self.app.layout.focus(self.btn_mail)
 
         async def runner():
             ticker = asyncio.ensure_future(self._ticker())
@@ -860,7 +802,5 @@ class PsswrdApp:
                 await self.app.run_async()
             finally:
                 ticker.cancel()
-                if self._hide_task and not self._hide_task.done():
-                    self._hide_task.cancel()
 
         asyncio.run(runner())
