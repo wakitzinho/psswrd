@@ -1,3 +1,5 @@
+# WIP absolutely not finished
+
 # psswrd — local-first TUI password manager
 
 Type `psswrd`, enter your master password, manage passwords in a btop-style TUI.
@@ -42,5 +44,7 @@ Needs Python ≥ 3.10. Deps: `prompt-toolkit`, `cryptography`, `argon2-cffi`, `p
 | `c` | copy email |
 | `d` | delete selected |
 | `i` | import Bitwarden JSON |
+| `x` | export passwords as JSON |
 | `l` | lock |
-| `q` | quit |
+
+
