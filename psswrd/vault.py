@@ -135,8 +135,11 @@ class Vault:
             "ciphertext": _b64e(ct),
         }
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps(blob))
-        os.chmod(tmp, 0o600)
+        if tmp.exists():  # stale file from a previous interrupted save
+            tmp.unlink()
+        with open(tmp, "xb") as fh:
+            os.chmod(tmp, 0o600)  # lock BEFORE any contents are written
+            fh.write(json.dumps(blob).encode("utf-8"))
         tmp.replace(self.path)
         try:
             os.chmod(self.path, 0o600)

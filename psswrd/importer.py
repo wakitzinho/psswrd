@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from .vault import new_entry
@@ -36,7 +37,15 @@ def parse_bitwarden_file(path: str | Path) -> list[dict]:
 
 
 def export_bitwarden(entries: list[dict], path: str | Path) -> None:
-    """Export vault entries as an unencrypted Bitwarden JSON file."""
+    """Export vault entries as an unencrypted Bitwarden JSON file.
+
+    Writes atomically (temp file + rename) so the plaintext never exists
+    at the destination with looser permissions, and refuses to overwrite an
+    existing file silently.
+    """
+    p = Path(path).expanduser()
+    if p.exists():
+        raise FileExistsError(f"{p} already exists — refusing to overwrite")
     items = []
     for e in entries:
         item = {
@@ -50,5 +59,11 @@ def export_bitwarden(entries: list[dict], path: str | Path) -> None:
         }
         items.append(item)
     blob = {"encrypted": False, "items": items}
-    p = Path(path).expanduser()
-    p.write_text(json.dumps(blob, indent=2))
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(blob, indent=2))
+    os.chmod(tmp, 0o600)
+    tmp.replace(p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass

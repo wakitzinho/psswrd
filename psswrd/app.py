@@ -9,6 +9,7 @@ shows straight through.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
 
 from prompt_toolkit import Application
@@ -29,7 +30,7 @@ from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Button, Frame, Label, TextArea
 
-from .clipboard import copy_text
+from .clipboard import clear_clipboard, copy_text
 from .generator import generate_password
 from .importer import parse_bitwarden_file, export_bitwarden
 from .vault import Vault, new_entry
@@ -112,6 +113,9 @@ class PsswrdApp:
         self._entry_field_order: list = [] # ordered list of entry fields
         self._entry_save = None            # current entry save callback
         self._gen_len = None              # current generator length field
+        self._revealed = False            # password masked unless explicitly revealed
+        self._mine_at = 0.0               # monotonic deadline for reveal+clipboard auto-hide
+        self._clear_armed = False         # clear clipboard when _mine_at passes
         self.app: Application | None = None
         self._build_widgets()
         self._refresh_selection(keep=False)
@@ -135,6 +139,7 @@ class PsswrdApp:
         self.search_field.accept_handler = lambda _b: self._leave_filter()
 
         self.btn_mail = Button("[c]mail", handler=self._copy_mail)
+        self.btn_reveal = Button("[r]eveal", handler=self._reveal_toggle)
         self.btn_edit = Button("[e]dit", handler=self._open_edit)
         self.btn_del = Button("[d]el", handler=self._open_delete)
 
@@ -147,7 +152,7 @@ class PsswrdApp:
             HSplit([
                 Window(content=self.detail_control),
                 VSplit(
-                    [self.btn_mail, self.btn_edit, self.btn_del],
+                    [self.btn_mail, self.btn_reveal, self.btn_edit, self.btn_del],
                     padding=3, height=1,
                 ),
             ]),
@@ -247,8 +252,11 @@ class PsswrdApp:
             ("class:dim", "pass  "),
         ]
         pw = e.get("password", "")
-        if pw:
+        if self._revealed and pw:
             toks += [("class:good", pw, self._click_copy_pass), ("", "\n")]
+        elif pw:
+            mask = "•" * max(8, len(pw))
+            toks += [("class:dim", mask), ("", "  [r]eveal"), ("", "\n")]
         else:
             toks += [("class:dim", "(empty)\n")]
         toks += [
@@ -268,17 +276,75 @@ class PsswrdApp:
 
     def _click_copy_pass(self, mouse_event) -> None:
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
-            self._copy_pass_only()
+            self._reveal_toggle()
 
     def _click_copy_mail(self, mouse_event) -> None:
         if mouse_event.event_type == MouseEventType.MOUSE_UP:
             self._copy_mail()
 
-    def _status_tokens(self):
-        return [("class:good", "▸ "), ("class:status", self._status)]
+    # ---------- copy ----------
+
+    def _mask(self, clear_clip: bool = False) -> None:
+        # hide the revealed password now (may also flush the clipboard / timer)
+        self._revealed = False
+        if self._closers:
+            return
+        self.btn_reveal.text = "[r]eveal"
+        was_armed = self._clear_armed
+        self._disarm_clip()
+        if (clear_clip or was_armed) and clear_clipboard():
+            self._status = "clipboard cleared"
+        self._invalidate()
+
+    def _disarm_clip(self) -> None:
+        self._clear_armed = False
+        self._mine_at = 0.0
+
+    def _arming_clip(self, arm: bool) -> None:
+        self._clear_armed = arm
+        self._mine_at = time.monotonic() + 20.0
+
+    def _tick_transience(self) -> None:
+        if self._mine_at and time.monotonic() >= self._mine_at:
+            self._mask()
+
+    def _reveal_toggle(self) -> None:
+        e = self._current()
+        if not e or not e.get("password"):
+            self._log("nothing to reveal")
+            return
+        if self._revealed:
+            self._mask()
+            self._status = "pass hidden, clipboard cleared"
+            self._invalidate()
+        else:
+            self._revealed = True
+            self._arming_clip(True)
+            self.btn_reveal.text = "[h]ide"
+            self._copy_pass_only()
+
+    def _copy_mail(self) -> None:
+        e = self._current()
+        if e and e.get("email"):
+            ok = copy_text(e["email"])
+            self._arming_clip(True)
+            self._log("mail copied" if ok else "no clipboard")
+        else:
+            self._log("nothing to copy")
+
+    def _copy_pass_only(self) -> None:
+        e = self._current()
+        if e and e.get("password"):
+            ok = copy_text(e["password"])
+            self._arming_clip(True)
+            self._log("pass copied" if ok else "no clipboard")
+        else:
+            self._log("nothing to copy")
+
+    # ---------- state ----------
 
     def _menubar_tokens(self):
-        items = [("n", "new"), ("e", "edit"), ("y", "copy"),
+        items = [("n", "new"), ("e", "edit"), ("y", "copy"), ("r", "reveal"),
                  ("d", "del"), ("j/k", "move"), ("/", "filter"),
                  ("i", "import"), ("x", "export"), ("q", "quit")]
         toks: list = []
@@ -286,7 +352,8 @@ class PsswrdApp:
             toks += [("class:menukey", f"[{key}]"), ("class:menudim", f"{label}  ")]
         return toks
 
-    # ---------- state ----------
+    def _status_tokens(self):
+        return [("class:good", "▸ "), ("class:status", self._status)]
 
     def _invalidate(self) -> None:
         if self.app is not None:
@@ -299,8 +366,12 @@ class PsswrdApp:
     def _refresh_selection(self, keep: bool = True) -> None:
         entries = self._visible_entries()
         ids = {e["id"] for e in entries}
+        changed = False
         if not keep or self._selected_id not in ids:
             self._selected_id = entries[0]["id"] if entries else None
+            changed = True
+        if changed:
+            self._mask()
 
     def _move(self, delta: int) -> None:
         entries = self._visible_entries()
@@ -316,29 +387,12 @@ class PsswrdApp:
             return
         i = max(0, min(len(ids) - 1, i + delta))
         self._selected_id = ids[i]
+        self._mask()
         self._invalidate()
 
     def _on_filter_changed(self, _buffer) -> None:
         self._refresh_selection(keep=True)
         self._invalidate()
-
-    # ---------- copy ----------
-
-    def _copy_mail(self) -> None:
-        e = self._current()
-        if e and e.get("email"):
-            ok = copy_text(e["email"])
-            self._log("mail copied" if ok else "no clipboard")
-        else:
-            self._log("nothing to copy")
-
-    def _copy_pass_only(self) -> None:
-        e = self._current()
-        if e and e.get("password"):
-            ok = copy_text(e["password"])
-            self._log("pass copied to clipboard" if ok else "no clipboard")
-        else:
-            self._log("nothing to copy")
 
     # ---------- key bindings ----------
 
@@ -373,6 +427,10 @@ class PsswrdApp:
         @kb.add("y", filter=active)
         def _(event):
             self._copy_pass_only()
+
+        @kb.add("r", filter=active)
+        def _(event):
+            self._reveal_toggle()
 
         @kb.add("c", filter=active)
         def _(event):
@@ -790,6 +848,7 @@ class PsswrdApp:
     async def _ticker(self) -> None:
         while True:
             await asyncio.sleep(1)
+            self._tick_transience()
             self._invalidate()
 
     def run(self) -> None:
